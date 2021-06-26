@@ -4,6 +4,7 @@ use core::pin::Pin;
 use drogue_device::{drivers::led::*, *};
 use embassy_stm32::adc;
 use embedded_hal::digital::v2::{StatefulOutputPin, ToggleableOutputPin};
+use libm::log;
 
 #[derive(Clone, Copy)]
 pub enum Command {
@@ -81,9 +82,39 @@ where
                 self.config.user_led.toggle().ok();
                 let preset = self.config.reader.read_preset() >> 4;
                 let probe = self.config.reader.read_probe();
-                defmt::info!("Preset: {}, Probe: {}", preset, probe);
+                let temp = steinhart(probe);
+                defmt::info!(
+                    "Preset: {}, Probe: {}, Temperature: {} °C",
+                    preset,
+                    probe,
+                    temp
+                );
             }
         }
         async {}
     }
+}
+
+/// Convert raw ADC value to degree C using Steinhart
+fn steinhart(v: u16) -> f64 {
+    const SERIESRESISTOR: f64 = 100_000.0; // 100kOhm
+    const THERMISTORNOMINAL: f64 = 100_000.0;
+    const TEMPERATURENOMINAL: f64 = 25.0;
+    const BCOEFFICIENT: f64 = 3950.0;
+
+    const MAX_VALUE: f64 = 4095.0; // 12bit
+
+    let mut v: f64 = MAX_VALUE / v as f64;
+    v = SERIESRESISTOR / v;
+
+    let mut steinhart = v / THERMISTORNOMINAL; // (R/Ro)
+    steinhart = log(steinhart); // ln(R/Ro)
+    steinhart /= BCOEFFICIENT; // 1/B * ln(R/Ro)
+    steinhart += 1.0 / (TEMPERATURENOMINAL + 273.15); // + (1/To)
+    steinhart = 1.0 / steinhart; // Invert
+    steinhart -= 273.15; // convert absolute
+
+    // return
+
+    steinhart
 }

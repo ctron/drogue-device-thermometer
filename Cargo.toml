@@ -30,6 +30,8 @@ embedded-hal = { version = "0.2.4", features = ["unproven"] }
 embedded-graphics = "0.7.1"
 ssd1306 = "0.6.0"
 
+libm = "0.2"
+
 #embassy = {path = "../../../../../embassy/embassy", default-features = false}
 #embassy-stm32 = {path = "../../../../../embassy/embassy-stm32", default-features = false, features = ["stm32l072cz"] }
 

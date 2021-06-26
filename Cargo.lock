@@ -361,6 +361,7 @@ dependencies = [
  "embassy-stm32",
  "embedded-graphics",
  "embedded-hal",
+ "libm",
  "panic-probe",
  "ssd1306",
  "stm32l4 0.13.0",
@@ -703,6 +704,12 @@ name = "libc"
 version = "0.2.97"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "12b8adadd720df158f4d70dfe7ccc6adb0472d7c55ca83445f6a5ab3e36f8fb6"
+
+[[package]]
+name = "libm"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c7d73b3f436185384286bd8098d17ec07c9a7d2388a6599f824d8502b529702a"
 
 [[package]]
 name = "linked-hash-map"

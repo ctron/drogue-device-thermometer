@@ -68,19 +68,16 @@ where
 
     #[rustfmt::skip]
     type OnStartFuture<'m> where D: 'm = impl Future<Output = ()> + 'm;
-    fn on_start(self: Pin<&'_ mut Self>) -> Self::OnStartFuture<'_> {
+    fn on_start(self: Pin<&mut Self>) -> Self::OnStartFuture<'_> {
         async move {}
     }
 
     #[rustfmt::skip]
     type OnMessageFuture<'m> where D: 'm = impl Future<Output = Self::Response> + 'm;
-    fn on_message<'m>(
-        self: Pin<&'m mut Self>,
-        message: Self::Message<'m>,
-    ) -> Self::OnMessageFuture<'m> {
+    fn on_message(self: Pin<&mut Self>, message: Self::Message<'_>) -> Self::OnMessageFuture<'_> {
         async move {
             match message {
-                Self::Message::<'m>::Show(str) => {}
+                Self::Message::<'_>::Show(str) => {}
             }
             Ok(())
         }

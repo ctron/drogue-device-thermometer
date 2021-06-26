@@ -10,56 +10,61 @@ pub enum Command {
     Toggle,
 }
 
-pub struct AppInitConfig<L1, ADC1, ADC1P>
+pub struct AppInitConfig<L1, ADC, ADCP1, ADCP2>
 where
     L1: StatefulOutputPin + ToggleableOutputPin + 'static,
-    ADC1: adc::Instance + Sized,
-    ADC1P: adc::AdcPin<ADC1> + Sized,
+    ADC: adc::Instance + Sized,
+    ADCP1: adc::AdcPin<ADC> + Sized,
+    ADCP2: adc::AdcPin<ADC> + Sized,
 {
     pub user_led: Led<L1>,
-    pub set_temp: AdcReader<'static, ADC1, ADC1P>,
+    pub reader: AdcReader<'static, ADC, ADCP1, ADCP2>,
 }
 
-pub struct App<L1, ADC1, ADC1P>
+pub struct App<L1, ADC, ADCP1, ADCP2>
 where
     L1: StatefulOutputPin + ToggleableOutputPin + 'static,
-    ADC1: adc::Instance + Sized,
-    ADC1P: adc::AdcPin<ADC1> + Sized,
+    ADC: adc::Instance + Sized,
+    ADCP1: adc::AdcPin<ADC> + Sized,
+    ADCP2: adc::AdcPin<ADC> + Sized,
 {
-    config: AppInitConfig<L1, ADC1, ADC1P>,
+    config: AppInitConfig<L1, ADC, ADCP1, ADCP2>,
 }
 
-impl<L1, ADC1, ADC1P> App<L1, ADC1, ADC1P>
+impl<L1, ADC, ADCP1, ADCP2> App<L1, ADC, ADCP1, ADCP2>
 where
     L1: StatefulOutputPin + ToggleableOutputPin + 'static,
-    ADC1: adc::Instance + Sized,
-    ADC1P: adc::AdcPin<ADC1> + Sized,
+    ADC: adc::Instance + Sized,
+    ADCP1: adc::AdcPin<ADC> + Sized,
+    ADCP2: adc::AdcPin<ADC> + Sized,
 {
-    pub fn new(config: AppInitConfig<L1, ADC1, ADC1P>) -> Self {
+    pub fn new(config: AppInitConfig<L1, ADC, ADCP1, ADCP2>) -> Self {
         Self { config }
     }
 }
 
-impl<L1, ADC1, ADC1P> Unpin for App<L1, ADC1, ADC1P>
+impl<L1, ADC, ADCP1, ADCP2> Unpin for App<L1, ADC, ADCP1, ADCP2>
 where
     L1: StatefulOutputPin + ToggleableOutputPin,
-    ADC1: adc::Instance,
-    ADC1P: adc::AdcPin<ADC1>,
+    ADC: adc::Instance,
+    ADCP1: adc::AdcPin<ADC>,
+    ADCP2: adc::AdcPin<ADC>,
 {
 }
 
-impl<L1, ADC1, ADC1P> Actor for App<L1, ADC1, ADC1P>
+impl<L1, ADC, ADCP1, ADCP2> Actor for App<L1, ADC, ADCP1, ADCP2>
 where
     L1: StatefulOutputPin + ToggleableOutputPin + 'static,
-    ADC1: adc::Instance,
-    ADC1P: adc::AdcPin<ADC1> + 'static,
+    ADC: adc::Instance,
+    ADCP1: adc::AdcPin<ADC> + 'static,
+    ADCP2: adc::AdcPin<ADC> + 'static,
 {
     #[rustfmt::skip]
     type Message<'m> = Command;
     #[rustfmt::skip]
     type OnStartFuture<'m> = impl Future<Output = ()> + 'm;
 
-    fn on_start<'m>(mut self: Pin<&'m mut Self>) -> Self::OnStartFuture<'m> {
+    fn on_start(mut self: Pin<&mut Self>) -> Self::OnStartFuture<'_> {
         async move {
             self.config.user_led.on().ok();
         }
@@ -67,15 +72,16 @@ where
 
     type OnMessageFuture<'m> = impl Future<Output = ()> + 'm;
 
-    fn on_message<'m>(
-        mut self: Pin<&'m mut Self>,
-        message: Self::Message<'m>,
-    ) -> Self::OnMessageFuture<'m> {
+    fn on_message(
+        mut self: Pin<&mut Self>,
+        message: Self::Message<'_>,
+    ) -> Self::OnMessageFuture<'_> {
         match message {
             Command::Toggle => {
                 self.config.user_led.toggle().ok();
-                let v = self.config.set_temp.read() >> 4;
-                defmt::info!("Set: {}", v);
+                let preset = self.config.reader.read_preset() >> 4;
+                let probe = self.config.reader.read_probe();
+                defmt::info!("Preset: {}, Probe: {}", preset, probe);
             }
         }
         async {}

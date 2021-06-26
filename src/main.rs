@@ -16,7 +16,7 @@ use drogue_device::{actors::ticker::*, drivers::led::*, *};
 use embassy_stm32::{
     gpio::{Level, Output},
     interrupt,
-    peripherals::{ADC1, PA0, PB3},
+    peripherals::{ADC1, PA0, PA1, PB3},
     Peripherals,
 };
 
@@ -41,7 +41,7 @@ use embassy_stm32::i2c;
 
 type Led1Pin = Output<'static, PB3>;
 
-type MyApp = App<Led1Pin, ADC1, PA0>;
+type MyApp = App<Led1Pin, ADC1, PA0, PA1>;
 
 #[cfg(feature = "display")]
 pub type Ssd1306<'a> =
@@ -118,13 +118,13 @@ async fn main(spawner: embassy::executor::Spawner, p: Peripherals) {
     let (mut adc, _) = Adc::new(p.ADC1, delay);
     adc.set_resolution(Resolution::TwelveBit);
 
-    let mut set_temp = AdcReader::new(adc, p.PA0);
+    let reader = AdcReader::new(adc, p.PA0, p.PA1);
 
     DEVICE.configure(MyDevice {
         ticker: ActorContext::new(Ticker::new(Duration::from_millis(250), Command::Toggle)),
         app: ActorContext::new(App::new(AppInitConfig {
             user_led: led1,
-            set_temp,
+            reader,
         })),
         #[cfg(feature = "display")]
         display: ActorContext::new(Ssd1306Driver::new(i2c)),

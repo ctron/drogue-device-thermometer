@@ -6,7 +6,7 @@ encoding utf-8
 Sheet 1 1
 Title ""
 Date ""
-Rev "1"
+Rev "2"
 Comp ""
 Comment1 "Designed for AISLER 2-Layer Service"
 Comment2 ""
@@ -338,14 +338,12 @@ Text GLabel 5300 3100 2    50   Input ~ 0
 ADC1
 Text GLabel 5300 3200 2    50   Input ~ 0
 ADC2
-Text GLabel 5300 3600 2    50   BiDi ~ 0
+Text GLabel 4300 3000 0    50   BiDi ~ 0
 DPY_SCK
-Text GLabel 5300 3500 2    50   BiDi ~ 0
+Text GLabel 4300 2900 0    50   BiDi ~ 0
 DPY_SDA
 NoConn ~ 5300 2600
 NoConn ~ 5300 2500
-NoConn ~ 4300 2900
-NoConn ~ 4300 3000
 NoConn ~ 4300 3200
 NoConn ~ 5000 2100
 NoConn ~ 4800 4100
@@ -378,4 +376,6 @@ Text GLabel 4300 3100 0    50   Input ~ 0
 ESP_GIO0
 Text GLabel 4300 3400 0    50   Input ~ 0
 ESP_GPIO2
+NoConn ~ 5300 3500
+NoConn ~ 5300 3600
 $EndSCHEMATC

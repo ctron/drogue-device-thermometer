@@ -12,46 +12,69 @@
 use defmt_rtt as _;
 use panic_probe as _;
 
-use drogue_device::{actors::ticker::*, drivers::led::*, *};
+use drogue_device::{
+    actors::{
+        ticker::*,
+        wifi::{esp8266::*, *},
+    },
+    drivers::led::*,
+    *,
+};
 use embassy_stm32::{
-    gpio::{Level, Output},
+    adc::{Adc, Resolution},
+    gpio::{Level, NoPin, Output},
     interrupt,
-    peripherals::{ADC1, PA0, PA1, PB3},
+    peripherals::{ADC1, I2C1, PA0, PA1, PA12, PB0, PB3},
+    time::U32Ext,
     Peripherals,
 };
 
 mod app;
+mod data;
 mod reader;
 
+use crate::reader::AdcReader;
 use app::*;
 use cortex_m::delay::Delay;
 use embassy::time::Duration;
-use embassy_stm32::adc::{Adc, Resolution};
-use embassy_stm32::time::U32Ext;
-
 use stm32l4::stm32l4x2 as pac;
 
 #[cfg(feature = "display")]
 use ssd1306::size::DisplaySize128x32;
 #[cfg(feature = "display")]
 mod display;
-use crate::reader::AdcReader;
 #[cfg(feature = "display")]
 use embassy_stm32::i2c;
+#[cfg(feature = "display")]
+use ssd1306::rotation::DisplayRotation;
+
+use crate::display::DisplayActor;
+#[cfg(feature = "wifi")]
+use drogue_device::{actors::wifi::esp8266::Esp8266Wifi, traits::ip::SocketAddress};
+use embassy_stm32::gpio::Speed;
 
 type Led1Pin = Output<'static, PB3>;
 
-type MyApp = App<Led1Pin, ADC1, PA0, PA1>;
+type MyApp = App<Led1Pin, ADC1, PA0, PA1, Ssd1306>;
+
+#[cfg(feature = "wifi")]
+type UART = BufferedUarte<'static, UARTE0, TIMER0>;
+#[cfg(feature = "wifi")]
+type ENABLE = Output<'static, PA12>;
+#[cfg(feature = "wifi")]
+type RESET = Output<'static, PB0>;
 
 #[cfg(feature = "display")]
-pub type Ssd1306<'a> =
-    display::Ssd1306Driver<'a, i2c::Spi<'a, pac::I2C1>, DisplaySize128x32, i2c::Error>;
+pub type Ssd1306 =
+    display::Ssd1306Driver<'static, i2c::I2c<'static, I2C1>, DisplaySize128x32, i2c::Error>;
 
 pub struct MyDevice {
+    #[cfg(feature = "wifi")]
+    wifi: Esp8266Wifi<UART, ENABLE, RESET>,
     app: ActorContext<'static, MyApp>,
     ticker: ActorContext<'static, Ticker<'static, MyApp>>,
     #[cfg(feature = "display")]
-    display: ActorContext<'static, Ssd1306<'static>>,
+    display: ActorContext<'static, display::DisplayActor<Ssd1306>>,
 }
 
 static DEVICE: DeviceContext<MyDevice> = DeviceContext::new();
@@ -103,17 +126,42 @@ async fn main(spawner: embassy::executor::Spawner, p: Peripherals) {
 
     defmt::info!("Starting up...");
 
-    #[cfg(feature = "display")]
-    let i2c = i2c::I2C::new(
-        p.I2C1,
-        p.PB3,
-        p.PA7,
-        p.PA6,
-        200_000.hz(),
-        i2c::Config::default(),
-    );
+    #[cfg(feature = "wifi")]
+    {
+        defmt::info!("Configure ESP");
+        let mut config = uarte::Config::default();
+        config.parity = uarte::Parity::EXCLUDED;
+        config.baudrate = uarte::Baudrate::BAUD115200;
 
-    let led1 = Led::new(Output::new(p.PB3, Level::High));
+        static mut TX_BUFFER: [u8; 256] = [0u8; 256];
+        static mut RX_BUFFER: [u8; 256] = [0u8; 256];
+
+        let irq = interrupt::take!(UARTE0_UART0);
+        let u = unsafe {
+            BufferedUarte::new(
+                p.UARTE0,
+                p.TIMER0,
+                p.PPI_CH0,
+                p.PPI_CH1,
+                irq,
+                p.P0_13,
+                p.P0_01,
+                NoPin,
+                NoPin,
+                config,
+                &mut RX_BUFFER,
+                &mut TX_BUFFER,
+            )
+        };
+
+        let enable_pin = Output::new(p.P0_09, Level::Low);
+        let reset_pin = Output::new(p.P0_10, Level::Low);
+    }
+
+    #[cfg(feature = "display")]
+    let i2c = i2c::I2c::new(p.I2C1, p.PB6, p.PB7, 200_000.hz());
+
+    let led1 = Led::new(Output::new(p.PB3, Level::High, Speed::Low));
 
     let (mut adc, _) = Adc::new(p.ADC1, delay);
     adc.set_resolution(Resolution::TwelveBit);
@@ -121,18 +169,28 @@ async fn main(spawner: embassy::executor::Spawner, p: Peripherals) {
     let reader = AdcReader::new(adc, p.PA0, p.PA1);
 
     DEVICE.configure(MyDevice {
+        #[cfg(feature = "wifi")]
+        wifi: Esp8266Wifi::new(u, enable_pin, reset_pin),
         ticker: ActorContext::new(Ticker::new(Duration::from_millis(250), Command::Toggle)),
         app: ActorContext::new(App::new(AppInitConfig {
             user_led: led1,
             reader,
         })),
         #[cfg(feature = "display")]
-        display: ActorContext::new(Ssd1306Driver::new(i2c)),
+        display: ActorContext::new(DisplayActor::new(display::Ssd1306Driver::new(
+            i2c,
+            ssd1306::size::DisplaySize128x32,
+            ssd1306::rotation::DisplayRotation::Rotate0,
+        ))),
     });
 
-    DEVICE.mount(|device| {
-        let app = device.app.mount((), spawner);
-        let ticker = device.ticker.mount(app, spawner);
-        ticker.notify(TickerCommand::Start).unwrap();
-    });
+    DEVICE
+        .mount(|device| async move {
+            #[cfg(feature = "display")]
+            let display = device.display.mount((), spawner);
+            let app = device.app.mount(AppConfig { display }, spawner);
+            let ticker = device.ticker.mount(app, spawner);
+            ticker.notify(TickerCommand::Start).unwrap();
+        })
+        .await;
 }

@@ -1,8 +1,11 @@
+use crate::data::Telemetry;
+use crate::display::{DisplayActor, DisplayDriver};
 use crate::reader::AdcReader;
 use core::future::Future;
 use core::pin::Pin;
 use drogue_device::{drivers::led::*, *};
 use embassy_stm32::adc;
+use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_hal::digital::v2::{StatefulOutputPin, ToggleableOutputPin};
 use libm::log;
 
@@ -22,48 +25,67 @@ where
     pub reader: AdcReader<'static, ADC, ADCP1, ADCP2>,
 }
 
-pub struct App<L1, ADC, ADCP1, ADCP2>
+pub struct AppConfig<'a, DPY>
 where
-    L1: StatefulOutputPin + ToggleableOutputPin + 'static,
-    ADC: adc::Instance + Sized,
-    ADCP1: adc::AdcPin<ADC> + Sized,
-    ADCP2: adc::AdcPin<ADC> + Sized,
+    DPY: DisplayDriver<Color = BinaryColor> + 'static,
 {
-    config: AppInitConfig<L1, ADC, ADCP1, ADCP2>,
+    #[cfg(feature = "display")]
+    pub display: Address<'a, DisplayActor<DPY>>,
 }
 
-impl<L1, ADC, ADCP1, ADCP2> App<L1, ADC, ADCP1, ADCP2>
+pub struct App<L1, ADC, ADCP1, ADCP2, DPY>
 where
     L1: StatefulOutputPin + ToggleableOutputPin + 'static,
     ADC: adc::Instance + Sized,
     ADCP1: adc::AdcPin<ADC> + Sized,
     ADCP2: adc::AdcPin<ADC> + Sized,
+    DPY: DisplayDriver<Color = BinaryColor> + 'static,
+{
+    config: AppInitConfig<L1, ADC, ADCP1, ADCP2>,
+    ctx: Option<AppConfig<'static, DPY>>,
+}
+
+impl<L1, ADC, ADCP1, ADCP2, DPY> App<L1, ADC, ADCP1, ADCP2, DPY>
+where
+    L1: StatefulOutputPin + ToggleableOutputPin + 'static,
+    ADC: adc::Instance + Sized,
+    ADCP1: adc::AdcPin<ADC> + Sized,
+    ADCP2: adc::AdcPin<ADC> + Sized,
+    DPY: DisplayDriver<Color = BinaryColor> + 'static,
 {
     pub fn new(config: AppInitConfig<L1, ADC, ADCP1, ADCP2>) -> Self {
-        Self { config }
+        Self { config, ctx: None }
     }
 }
 
-impl<L1, ADC, ADCP1, ADCP2> Unpin for App<L1, ADC, ADCP1, ADCP2>
+impl<L1, ADC, ADCP1, ADCP2, DPY> Unpin for App<L1, ADC, ADCP1, ADCP2, DPY>
 where
     L1: StatefulOutputPin + ToggleableOutputPin,
     ADC: adc::Instance,
     ADCP1: adc::AdcPin<ADC>,
     ADCP2: adc::AdcPin<ADC>,
+    DPY: DisplayDriver<Color = BinaryColor> + 'static,
 {
 }
 
-impl<L1, ADC, ADCP1, ADCP2> Actor for App<L1, ADC, ADCP1, ADCP2>
+impl<L1, ADC, ADCP1, ADCP2, DPY> Actor for App<L1, ADC, ADCP1, ADCP2, DPY>
 where
     L1: StatefulOutputPin + ToggleableOutputPin + 'static,
     ADC: adc::Instance,
     ADCP1: adc::AdcPin<ADC> + 'static,
     ADCP2: adc::AdcPin<ADC> + 'static,
+    DPY: DisplayDriver<Color = BinaryColor> + 'static,
 {
+    #[rustfmt::skip]
+    type Configuration = AppConfig<'static, DPY>;
     #[rustfmt::skip]
     type Message<'m> = Command;
     #[rustfmt::skip]
     type OnStartFuture<'m> = impl Future<Output = ()> + 'm;
+
+    fn on_mount(&mut self, _: Address<'_, Self>, cfg: Self::Configuration) {
+        self.ctx.replace(cfg);
+    }
 
     fn on_start(mut self: Pin<&mut Self>) -> Self::OnStartFuture<'_> {
         async move {
@@ -82,13 +104,17 @@ where
                 self.config.user_led.toggle().ok();
                 let preset = self.config.reader.read_preset() >> 4;
                 let probe = self.config.reader.read_probe();
-                let temp = steinhart(probe);
+                let temperature = steinhart(probe);
                 defmt::info!(
                     "Preset: {}, Probe: {}, Temperature: {} °C",
                     preset,
                     probe,
-                    temp
+                    temperature
                 );
+                let telemetry = Telemetry {
+                    temperature,
+                    preset: preset as f64,
+                };
             }
         }
         async {}

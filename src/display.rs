@@ -1,21 +1,17 @@
 use crate::data::Telemetry;
 use core::fmt::Write as _;
-use core::{
-    future::Future,
-    ops::{Deref, DerefMut},
-    pin::Pin,
-};
+use core::future::Future;
 use display_interface::DisplayError;
-use drogue_device::Actor;
-use embedded_graphics::mono_font::ascii::FONT_6X9;
+use drogue_device::{Actor, Address, Inbox};
+use embedded_graphics::mono_font::iso_8859_1::FONT_8X13;
 use embedded_graphics::mono_font::MonoTextStyle;
 use embedded_graphics::prelude::Point;
 use embedded_graphics::{draw_target::DrawTarget, pixelcolor::BinaryColor, Drawable};
 use embedded_hal::blocking::i2c::Write;
 use heapless::String;
-use ssd1306::mode::BufferedGraphicsMode;
 use ssd1306::{
-    mode::BasicMode, prelude::I2CInterface, rotation::DisplayRotation, size::DisplaySize, Ssd1306,
+    mode::BufferedGraphicsMode, prelude::I2CInterface, rotation::DisplayRotation,
+    size::DisplaySize, Ssd1306,
 };
 
 pub struct Ssd1306Driver<'a, I2C, SIZE, E>
@@ -43,13 +39,20 @@ where
             _phantom: core::marker::PhantomData,
         }
     }
+
+    pub fn display(&mut self) -> &mut Ssd1306<I2CInterface<I2C>, SIZE, BufferedGraphicsMode<SIZE>> {
+        &mut self.display
+    }
 }
 
 pub trait DisplayDriver {
     type Target: DrawTarget<Color = Self::Color>;
     type Color;
+    type Error;
 
     fn as_draw(&mut self) -> &mut Self::Target;
+
+    fn flush(&mut self) -> Result<(), Self::Error>;
 }
 
 impl<'a, I2C, SIZE, E> DisplayDriver for Ssd1306Driver<'a, I2C, SIZE, E>
@@ -60,13 +63,18 @@ where
 {
     type Target = Ssd1306<I2CInterface<I2C>, SIZE, BufferedGraphicsMode<SIZE>>;
     type Color = BinaryColor;
+    type Error = DisplayError;
 
     fn as_draw(&mut self) -> &mut Self::Target {
         &mut self.display
     }
+
+    fn flush(&mut self) -> Result<(), Self::Error> {
+        self.display.flush()
+    }
 }
 
-pub enum DisplayRequest {
+pub enum DisplayCommand {
     Show(Telemetry),
 }
 
@@ -95,30 +103,31 @@ where
     type Configuration = ();
 
     #[rustfmt::skip]
-    type Message<'m> where D: 'm = DisplayRequest;
-    #[rustfmt::skip]
-    type Response = Result<(), ()>;
+    type Message<'m> = DisplayCommand;
 
     #[rustfmt::skip]
-    type OnStartFuture<'m> where D: 'm = impl Future<Output = ()> + 'm;
-    fn on_start(self: Pin<&mut Self>) -> Self::OnStartFuture<'_> {
-        async move {}
-    }
+    type OnMountFuture<'m, M> where M: 'm = impl Future<Output = ()> + 'm;
 
-    #[rustfmt::skip]
-    type OnMessageFuture<'m> where D: 'm = impl Future<Output = Self::Response> + 'm;
-
-    fn on_message<'m>(
-        mut self: Pin<&'m mut Self>,
-        message: Self::Message<'m>,
-    ) -> Self::OnMessageFuture<'m> {
+    fn on_mount<'m, M>(
+        &'m mut self,
+        _config: Self::Configuration,
+        _address: Address<'static, Self>,
+        inbox: &'m mut M,
+    ) -> Self::OnMountFuture<'m, M>
+    where
+        M: Inbox<'m, Self> + 'm,
+    {
         async move {
-            match message {
-                Self::Message::<'_>::Show(telemetry) => {
-                    self.display_telemetry(telemetry);
+            loop {
+                match inbox.next().await {
+                    Some(mut msg) => match msg.message() {
+                        Self::Message::<'_>::Show(telemetry) => {
+                            self.display_telemetry(telemetry);
+                        }
+                    },
+                    _ => {}
                 }
             }
-            Ok(())
         }
     }
 }
@@ -127,15 +136,31 @@ impl<D> DisplayActor<D>
 where
     D: DisplayDriver<Color = BinaryColor> + 'static,
 {
-    fn display_telemetry(&mut self, telemetry: Telemetry) {
-        let mut display = self.driver.as_draw();
-        display.clear(BinaryColor::Off).ok();
+    fn display_telemetry(&mut self, telemetry: &Telemetry) {
+        {
+            let display = self.driver.as_draw();
+            display.clear(BinaryColor::Off).ok();
 
-        let style = MonoTextStyle::new(&FONT_6X9, BinaryColor::On);
+            let style = MonoTextStyle::new(&FONT_8X13, BinaryColor::On);
 
-        let mut buf: String<32> = String::new();
-        write!(&mut buf, "{:.1} C", telemetry.temperature);
+            let mut buf: String<32> = String::new();
 
-        embedded_graphics::text::Text::new(&buf, Point::zero(), style).draw(display);
+            if let Some(temperature) = telemetry.temperature {
+                write!(
+                    &mut buf,
+                    "{:.1} °C / {:.0} °C",
+                    temperature, telemetry.preset
+                )
+                .ok();
+            } else {
+                write!(&mut buf, "<??> °C / {:.0} °C", telemetry.preset).ok();
+            }
+
+            embedded_graphics::text::Text::new(&buf, Point::new(1, 20), style)
+                .draw(display)
+                .ok();
+        }
+
+        self.driver.flush().ok();
     }
 }
